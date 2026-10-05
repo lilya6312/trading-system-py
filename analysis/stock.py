@@ -201,5 +201,33 @@ def screen_industry(industry: str, top_n: int = 10) -> dict:
 
     table = pd.DataFrame(rows).sort_values("总分", ascending=False).reset_index(drop=True)
     table.insert(0, "排名", range(1, len(table) + 1))
-    out["table"] = table.head(top_n)
+    table = table.head(top_n).copy()
+
+    # 基本面排雷列（并发，fundamental 自带 24h 缓存；接口不可达时列留空）
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from analysis.fundamental import fundamental_snapshot
+
+        def _fund(code: str) -> dict:
+            fd = fundamental_snapshot(code)
+            fin, info = fd.get("fin", {}), fd.get("info", {})
+            return {
+                "ROE%": fin.get("净资产收益率"),
+                "净利同比%": fin.get("净利润同比增长率"),
+                "负债率%": fin.get("资产负债率"),
+                "总市值亿": round(info["总市值"] / 1e8, 0) if info.get("总市值") else None,
+                "基本面预警": "；".join(fd.get("warnings", [])) or "-",
+            }
+
+        fund_rows = {}
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            futs = {ex.submit(_fund, str(r["代码"])): i for i, r in table.iterrows()}
+            for f in as_completed(futs):
+                fund_rows[futs[f]] = f.result()
+        for col in ("ROE%", "净利同比%", "负债率%", "总市值亿", "基本面预警"):
+            table[col] = [fund_rows.get(i, {}).get(col) for i in table.index]
+    except Exception:  # noqa: BLE001
+        pass
+
+    out["table"] = table
     return out
