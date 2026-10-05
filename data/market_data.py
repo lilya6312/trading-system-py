@@ -133,7 +133,7 @@ def get_index_spot() -> pd.DataFrame | None:
                 pass
         return _index_spot_sina()
 
-    return _cached("index_spot", producer)
+    return _cached("index_spot", producer, ttl=60)
 
 
 # ---------------- 2) 指数日线（新浪，AkShare 原生可用） ----------------
@@ -290,6 +290,93 @@ def get_industry_spot() -> pd.DataFrame | None:
     return _cached("industry_spot", producer)
 
 
+# ---------------- 5.5) 行业列表（90 细分 + 31 宽行业合并） ----------------
+# 同花顺细分行业名 → 东财/腾讯宽行业名（成分股/行情接口只认宽行业名）
+THS_TO_WIDE = {
+    # 电子
+    "半导体": "电子", "光学光电子": "电子", "消费电子": "电子", "其他电子": "电子",
+    "元件": "电子", "电子化学品": "电子",
+    # 食品饮料
+    "白酒": "食品饮料", "饮料制造": "食品饮料", "食品加工制造": "食品饮料",
+    "农产品加工": "食品饮料",
+    # 家用电器
+    "白色家电": "家用电器", "黑色家电": "家用电器", "厨卫电器": "家用电器",
+    "小家电": "家用电器",
+    # 电力设备
+    "电池": "电力设备", "电网设备": "电力设备", "风电设备": "电力设备",
+    "光伏设备": "电力设备", "电机": "电力设备", "其他电源设备": "电力设备",
+    # 医药生物
+    "化学制药": "医药生物", "生物制品": "医药生物", "中药": "医药生物",
+    "医疗服务": "医药生物", "医疗器械": "医药生物", "医药商业": "医药生物",
+    # 有色金属
+    "贵金属": "有色金属", "工业金属": "有色金属", "小金属": "有色金属",
+    "能源金属": "有色金属", "金属新材料": "有色金属",
+    # 通信 / 计算机 / 汽车
+    "通信服务": "通信", "通信设备": "通信",
+    "软件开发": "计算机", "IT服务": "计算机", "计算机设备": "计算机",
+    "汽车整车": "汽车", "汽车零部件": "汽车", "汽车服务及其他": "汽车",
+    # 基础化工
+    "化学原料": "基础化工", "化学制品": "基础化工", "化学纤维": "基础化工",
+    "农化制品": "基础化工", "塑料制品": "基础化工", "橡胶制品": "基础化工",
+    "非金属材料": "基础化工",
+    # 能源
+    "煤炭开采加工": "煤炭",
+    "石油加工贸易": "石油石化", "油气开采及服务": "石油石化", "燃气": "石油石化",
+    # 金融
+    "银行": "银行", "保险": "非银金融", "证券": "非银金融", "多元金融": "非银金融",
+    # 周期 / 制造
+    "钢铁": "钢铁", "房地产": "房地产", "建筑装饰": "建筑装饰",
+    "建筑材料": "建筑材料", "环保设备": "环保", "环境治理": "环保",
+    "港口航运": "交通运输", "公路铁路运输": "交通运输", "机场航运": "交通运输",
+    "物流": "交通运输",
+    "轨交设备": "机械设备", "工程机械": "机械设备", "通用设备": "机械设备",
+    "专用设备": "机械设备", "自动化设备": "机械设备",
+    "军工电子": "国防军工", "军工装备": "国防军工",
+    "服装家纺": "纺织服饰", "纺织制造": "纺织服饰",
+    "家居用品": "轻工制造", "包装印刷": "轻工制造", "造纸": "轻工制造",
+    "零售": "商贸零售", "贸易": "商贸零售", "互联网电商": "商贸零售",
+    "旅游及酒店": "社会服务", "教育": "社会服务", "其他社会服务": "社会服务",
+    "养殖业": "农林牧渔", "种植业与林业": "农林牧渔",
+    "游戏": "传媒", "文化传媒": "传媒", "影视院线": "传媒",
+    "综合": "综合",
+}
+# 反向：宽行业名 → 同花顺细分名（板块历史接口用；优先常见细分）
+WIDE_TO_THS_DEFAULT = {
+    "医药生物": "医药商业", "食品饮料": "食品加工制造", "汽车": "汽车整车",
+    "美容护理": "美容护理", "银行": "银行", "房地产": "房地产",
+    "公用事业": "电力", "交通运输": "公路铁路运输", "农林牧渔": "种植业与林业",
+    "电力设备": "电网设备", "有色金属": "工业金属", "电子": "消费电子",
+    "计算机": "软件开发", "通信": "通信设备", "传媒": "文化传媒",
+    "国防军工": "军工装备", "机械设备": "通用设备", "基础化工": "化学制品",
+    "钢铁": "钢铁", "煤炭": "煤炭开采加工", "石油石化": "石油加工贸易",
+    "建筑装饰": "建筑装饰", "建筑材料": "建筑材料", "环保": "环境治理",
+    "商贸零售": "零售", "社会服务": "旅游及酒店", "家用电器": "白色家电",
+    "纺织服饰": "服装家纺", "轻工制造": "家居用品", "综合": "综合",
+    "非银金融": "证券",
+}
+
+# 同花顺细分行业名（缓存；接口不可达时用内置表兜底）
+_THS_NAMES_FALLBACK = list(THS_TO_WIDE.keys()) + ["美容护理", "综合"]
+
+
+def get_all_industries() -> list[str]:
+    """
+    完整行业列表（页面下拉用）：
+    同花顺 90 细分行业名优先（成分股经 THS_TO_WIDE 映射回宽行业取数），
+    接口不可达时回退东财/腾讯宽行业名。
+    """
+    try:
+        if AK_AVAILABLE:
+            df = getattr(ak, "stock_board_industry_name_ths")()
+            if df is not None and not df.empty:
+                names = [str(x) for x in df["name"]]
+                if names:
+                    return names
+    except Exception:  # noqa: BLE001
+        pass
+    return _THS_NAMES_FALLBACK
+
+
 # ---------------- 6) 板块成分股 ----------------
 def _industry_cons_tx(industry: str) -> pd.DataFrame:
     spot = get_industry_spot()
@@ -320,15 +407,18 @@ def _industry_cons_tx(industry: str) -> pd.DataFrame:
 
 
 def get_industry_cons(industry: str) -> pd.DataFrame | None:
+    # 同花顺细分行业名 → 宽行业名（东财/腾讯接口只认宽行业）
+    wide = THS_TO_WIDE.get(industry, industry)
+
     def producer():
         if AK_AVAILABLE:
             try:
-                df = getattr(ak, "stock_board_industry_cons_em")(symbol=industry)
+                df = getattr(ak, "stock_board_industry_cons_em")(symbol=wide)
                 if df is not None and not df.empty:
                     return df
             except Exception:
                 pass
-        return _industry_cons_tx(industry)
+        return _industry_cons_tx(wide)
 
     return _cached(f"industry_cons:{industry}", producer)
 
@@ -365,3 +455,33 @@ def get_zt_pool(trade_date: str | None = None) -> pd.DataFrame | None:
         return _zt_pool_approx()
 
     return _cached(f"zt_pool:{trade_date or 'latest'}", producer)
+
+
+# ---------------- 8) 个股搜索（代码 / 名称） ----------------
+def search_stock(keyword: str, top: int = 10) -> pd.DataFrame:
+    """
+    按代码或名称模糊搜索 A 股：
+      - 6 位纯数字 → 精确代码
+      - 1-5 位数字 → 代码前缀
+      - 其他 → 名称包含匹配
+    返回候选表（代码/名称/最新价/涨跌幅），供"代码+名称搜索"输入框使用。
+    """
+    s = str(keyword or "").strip()
+    if not s:
+        return pd.DataFrame()
+    spot = get_all_stock_spot()
+    if spot is None or spot.empty:
+        return pd.DataFrame()
+    spot = spot.copy()
+    spot["代码"] = spot["代码"].astype(str).str.zfill(6)
+    name_col = "名称" if "名称" in spot.columns else "name"
+
+    if s.isdigit() and len(s) == 6:
+        m = spot[spot["代码"] == s]
+        return m.head(top) if not m.empty else pd.DataFrame()
+    if s.isdigit():
+        m = spot[spot["代码"].str.startswith(s)]
+        if not m.empty:
+            return m.head(top)
+    m = spot[spot[name_col].astype(str).str.contains(s, case=False, na=False)]
+    return m.head(top)
