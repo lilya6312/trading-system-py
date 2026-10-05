@@ -11,9 +11,23 @@ st.set_page_config(page_title="自选股池", page_icon="⭐", layout="wide")
 st.title("自选股池")
 
 # ---------------- 添加 ----------------
+st.subheader("添加自选股（支持名称搜索）")
+st.caption("输入 6 位代码 / 代码前缀 / 股票名称，选择候选自动带入代码。")
+from data import market_data as md
+
+kw = st.text_input("搜索（如 600519 / 茅台 / 宁德）", value="", key="add_watch_kw")
+cand = md.search_stock(kw) if kw else pd.DataFrame()
+pick_code = ""
+if kw and cand.empty:
+    st.info("未找到匹配股票，换关键词试试。")
+if not cand.empty:
+    opts = cand.astype(str).agg(lambda r: f"{r['代码']} {r['名称']}", axis=1).tolist()
+    pick = st.selectbox("选择候选", opts, key="add_watch_pick")
+    pick_code = str(pick).split(" ")[0]
+
 with st.form("add_watch_form"):
     c1, c2 = st.columns([1, 3])
-    code = c1.text_input("股票代码（6 位）", value="")
+    code = c1.text_input("股票代码（6 位）", value=pick_code)
     note = c2.text_input("备注（可选）", value="")
     submitted = st.form_submit_button("加入自选股", type="primary")
     if submitted:
