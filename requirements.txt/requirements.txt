@@ -1,6 +1,0 @@
-# 交易系统工作台依赖（Python 3.10+）
-akshare>=1.14.0
-streamlit>=1.36.0
-pandas>=2.0.0
-plotly>=5.20.0
-requests>=2.31.0
