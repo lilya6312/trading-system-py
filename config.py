@@ -88,6 +88,9 @@ MODELS = {
 # 单笔亏损预算默认比例（占总资金）
 DEFAULT_RISK_RATIO = 0.015       # 1.5%
 
+# 组合级风控参数（analysis/risk.py）
+RISK_COOLDOWN_DAYS = 5           # 回撤熔断后强制空仓的交易日数
+
 # 五档仓位：名称 -> (下限, 上限, 说明)
 POSITION_TIERS = {
     "空仓防御": (0.00, 0.20, "市场退潮/冰点，空仓也是仓位"),
