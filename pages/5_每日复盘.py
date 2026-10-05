@@ -35,6 +35,12 @@ with tab_input:
         emotion = c8.slider("情绪评分（1-5，越高越冲动）", 1, 5, 3)
         sell_reason = c9.selectbox("卖出原因", config.SELL_CONDITIONS + ["未卖出/持有中"])
 
+        st.markdown("**计划-执行对照**（评价执行力：偏离越小纪律越好）")
+        c10, c11, c12 = st.columns(3)
+        plan_price = c10.number_input("计划买入价（决策页信号给出）", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+        exec_price = c11.number_input("实际成交价", min_value=0.0, value=0.0, step=0.01, format="%.2f")
+        dev_reason = c12.selectbox("偏离原因", ["", "按计划执行", "高开追涨", "低吸捡便宜", "犹豫错过", "临时改计划", "其他"])
+
         lesson = st.text_area("教训 / 改进（框架问题还是偶然错判？下次怎么改）", height=80)
 
         submitted = st.form_submit_button("保存复盘", type="primary")
@@ -44,6 +50,8 @@ with tab_input:
                 "model": model, "buy_reason": buy_reason, "position": position,
                 "sell_reason": sell_reason, "pnl_pct": pnl_pct,
                 "emotion": emotion, "lesson": lesson,
+                "plan_price": plan_price or "", "exec_price": exec_price or "",
+                "dev_reason": dev_reason,
             }
             rv.add_review(row)
             st.success("已保存。复盘的目的是区分框架问题与偶然错判。")
@@ -103,6 +111,22 @@ with tab_stats:
                 f"**{stats['冲动交易均盈亏%']:+.2f}%**\n"
                 f"- 冷静交易平均盈亏 **{stats['冷静交易均盈亏%']:+.2f}%**"
             )
+
+        if stats.get("纪律分均值") is not None:
+            st.markdown("**计划执行纪律**（偏离越小越好，100/80/60/40 四档）")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("有计划的交易占比", f"{stats['有计划的交易占比']}%")
+            d2.metric("平均计划偏离", f"{stats['平均计划偏离%']}%")
+            d3.metric("纪律分均值", stats["纪律分均值"])
+            d4.metric("纪律等级", stats["纪律等级"])
+            if stats["纪律等级"] == "优":
+                st.success("执行纪律优秀，保持按计划交易。")
+            elif stats["纪律等级"] == "良":
+                st.info("纪律良好，偶有偏离，复盘偏离原因。")
+            elif stats["纪律等级"] == "中":
+                st.warning("纪律一般，偏离偏多，建议下单前强制写计划价。")
+            else:
+                st.error("纪律差：频繁偏离计划价。暂停实盘 2 周，只做模拟盘。")
 
         st.markdown("**盯盘与信息清单**（每周对照检查一次）")
         for s in config.INFO_SOURCES:
