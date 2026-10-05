@@ -81,10 +81,15 @@ def _suggest_price(model_name: str, i: dict) -> dict:
     return {"买点参考": buy, "卖点参考": sell, "止损参考": stop}
 
 
-def decide(code: str, model_name: str) -> dict:
-    """综合决策：指标 + 模型命中 + 价位建议 + 状态。"""
+def decide(code: str, model_name: str, phase: str | None = None) -> dict:
+    """
+    综合决策：指标 + 模型命中 + 价位建议 + 状态。
+    phase: 大盘阶段（强势/震荡/弱势/冰点，来自 analysis.market.market_overview），
+           弱势/冰点时封禁短线与右侧交易（铁律一：大盘退潮期不做超短）。
+    """
     out = {"ok": False, "error": "", "model": model_name, "indicators": None,
-           "hit": [], "miss": [], "prices": None, "status": "等待", "cycle": "", "position": ""}
+           "hit": [], "miss": [], "prices": None, "status": "等待", "cycle": "",
+           "position": "", "env_block": None, "phase": phase}
     hist = md.get_stock_hist(code, days=250)
     if hist is None or len(hist) < 20:
         out["error"] = "无法获取足够历史数据（代码可能错误或未上市）"
@@ -100,9 +105,15 @@ def decide(code: str, model_name: str) -> dict:
     out["hit"] = r["命中"]
     out["miss"] = r["未命中"]
 
+    # 大盘环境约束（铁律一：先看大盘）
+    if phase in ("弱势", "冰点") and model_name in ("短线", "右侧交易"):
+        out["env_block"] = f"大盘阶段为「{phase}」，{model_name}禁止开仓（铁律一：先看大盘）"
+
     hit_n = len(r["命中"])
     total_n = hit_n + len(r["未命中"])
-    if hit_n >= 2 and total_n >= 2 and hit_n / total_n >= 0.6:
+    if out["env_block"]:
+        out["status"] = "回避（大盘环境不允许）"
+    elif hit_n >= 2 and total_n >= 2 and hit_n / total_n >= 0.6:
         out["status"] = "符合入场条件"
     elif hit_n == 0:
         out["status"] = "回避（无信号，禁止逆势硬做）"
