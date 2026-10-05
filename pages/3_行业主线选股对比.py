@@ -11,20 +11,50 @@ from data import market_data as md
 st.set_page_config(page_title="行业主线选股对比", page_icon="🎯", layout="wide")
 st.title("行业主线个股选股对比")
 
-# 行业下拉
+# 行业下拉：同花顺 90 细分行业（强主线置顶并带生命周期标签）
 try:
-    ind = md.get_industry_spot()
-    if ind is None or ind.empty:
-        st.error("行业板块数据获取失败，请检查网络后重试。")
+    industries = md.get_all_industries()
+    if not industries:
+        st.error("行业板块列表获取失败，请检查网络后重试。")
         st.stop()
-    industries = ind["板块名称"].astype(str).tolist()
 except Exception as e:  # noqa: BLE001
-    st.error(f"行业板块数据获取失败：{e}")
+    st.error(f"行业板块列表获取失败：{e}")
     st.stop()
 
-industry = st.selectbox("选择行业板块", industries, index=0)
+# 强主线 + 生命周期（来自主线分析；细分行业名 → 宽行业名映射后匹配）
+_mainline_meta = {}
+try:
+    from analysis import mainline as ml
+    _ml = ml.mainline_ranking(top_n=8)
+    if _ml.get("ranking") is not None and not _ml["ranking"].empty:
+        for _, r in _ml["ranking"].iterrows():
+            _mainline_meta[str(r["板块名称"])] = str(r["生命周期"])
+except Exception:  # noqa: BLE001
+    pass
+
+from data.market_data import THS_TO_WIDE
+
+
+def _wide(x):
+    return THS_TO_WIDE.get(x, x)
+
+
+labelled = []
+for i in industries:
+    w = _wide(i)
+    tag = _mainline_meta.get(w, "")
+    labelled.append(f"{i}（{tag}）" if tag else i)
+
+_strong = [i for i in industries if _wide(i) in _mainline_meta and _mainline_meta[_wide(i)] in ("启动", "发酵")]
+_default_idx = 0
+if _strong:
+    _default_idx = industries.index(_strong[0])
+    st.caption(f"当前强主线（启动/发酵）：{'、'.join(_strong)}，下拉已默认选中第一个")
+sel_label = st.selectbox("选择行业板块（同花顺细分行业，共 %d 个）" % len(industries), labelled, index=_default_idx)
+industry = sel_label.split("（")[0]
 
 top_n = st.slider("展示前 N 名", 5, 30, 10, step=5)
+only_strong = st.checkbox("只看「强信号 / 中等」候选（过滤观望）", value=False)
 
 if st.button("执行选股打分", type="primary"):
     with st.spinner("正在拉取成分股与历史数据并打分……"):
@@ -36,9 +66,15 @@ if st.button("执行选股打分", type="primary"):
     if table is None or table.empty:
         st.stop()
 
+    if only_strong and "标签" in table.columns:
+        table = table[table["标签"] != "观望"].reset_index(drop=True)
+        if table.empty:
+            st.info("该板块无强信号/中等候选，按「观望」处理，建议不做。")
+
     st.subheader(f"「{industry}」选股打分排名")
     st.dataframe(table, use_container_width=True, hide_index=True)
-    st.caption("总分 = 动量(30) + 右侧(25) + 十日线战法(25) + 超跌(20)。标签：≥60 强信号，40-59 中等，<40 观望。")
+    st.caption("总分 = 动量(30) + 右侧(25) + 十日线战法(25) + 超跌(20)。标签：≥60 强信号，40-59 中等，<40 观望。"
+               "右侧基本面列为排雷参考：ROE/净利同比/负债率来自最新报告期，预警如'亏损/业绩下滑/高负债/小盘'。")
 
     # K 线对比
     st.subheader("个股 K 线对比（选 2-4 只）")
