@@ -44,6 +44,35 @@ if struct:
 else:
     st.error("市场结构数据获取失败。")
 
+# ---- 情绪面（赚钱效应） ----
+st.subheader("情绪面（赚钱效应）")
+from analysis import sentiment as sent
+
+emo = sent.sentiment_snapshot()
+for err in emo.get("errors", []):
+    st.caption(f"⚠️ {err}")
+if emo.get("情绪评分") is not None:
+    e1, e2, e3, e4, e5, e6 = st.columns(6)
+    e1.metric("情绪评分", emo["情绪评分"], help="0-100：涨停多/连板高/炸板少/溢价正 → 高分")
+    e2.metric("涨停家数", emo["涨停家数"] or "-")
+    e3.metric("最高连板", emo["最高连板"] or "-")
+    e4.metric("炸板率", f"{emo['炸板率']}%" if emo["炸板率"] is not None else "-")
+    e5.metric("昨日涨停今平均涨幅", f"{emo['昨日涨停今平均涨幅']}%" if emo["昨日涨停今平均涨幅"] is not None else "-")
+    e6.metric("晋级率", f"{emo['晋级率']}%" if emo["晋级率"] is not None else "-")
+    sc = emo["情绪评分"]
+    if sc >= 70:
+        st.success(f"情绪偏热（{sc}）：赚钱效应强，可积极跟踪主线，但注意高潮期别追最后一棒。")
+    elif sc >= 40:
+        st.info(f"情绪中性（{sc}）：结构性行情，做主线龙头、少碰杂毛。")
+    else:
+        st.warning(f"情绪低迷（{sc}）：接近冰点，超跌反弹候选增多，但左侧不抄底、等右侧信号。")
+    if emo.get("涨停股"):
+        with st.expander(f"今日涨停股清单（{len(emo['涨停股'])} 家）"):
+            import pandas as pd
+            st.dataframe(pd.DataFrame(emo["涨停股"]), use_container_width=True, hide_index=True)
+else:
+    st.error("情绪面数据获取失败（涨停池/快照均不可达）。")
+
 # ---- 大盘阶段 ----
 st.subheader("大盘阶段判断")
 phase = overview.get("phase")
