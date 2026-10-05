@@ -129,3 +129,106 @@ def market_overview() -> dict:
         result["errors"].append(f"指数日线接口失败: {e}")
 
     return result
+
+
+# ---------------- 每日行情分析（自动快评） ----------------
+_brief_cache: dict[str, tuple[float, dict]] = {}
+_BRIEF_TTL = 300  # 每日快评缓存 5 分钟
+
+
+def daily_brief(force: bool = False) -> dict:
+    """
+    每日行情分析：整合大盘阶段 + 市场结构 + 情绪面 + 主线识别，
+    自动生成结构化快评（指数 / 情绪 / 主线 / 操作提示），供"每日行情分析"区块展示。
+    结果缓存 5 分钟，避免页面 rerun 重复触发主线识别（~38s）。
+    """
+    import time
+    now = time.time()
+    hit = _brief_cache.get("brief")
+    if hit and now - hit[0] < _BRIEF_TTL and not force:
+        return hit[1]
+
+    from analysis import sentiment
+    from analysis import mainline
+
+    out = {"sections": {}, "text": "", "errors": []}
+
+    ov = market_overview()
+    out["errors"].extend(ov.get("errors", []))
+    emo = None
+    try:
+        emo = sentiment.sentiment_snapshot()
+        out["errors"].extend(emo.get("errors", []))
+    except Exception as e:  # noqa: BLE001
+        out["errors"].append(f"情绪面失败: {e}")
+
+    # 1) 指数
+    idx_text, idx_rows = "", []
+    idx = ov.get("indexes")
+    if idx is not None and not idx.empty:
+        idx_rows = idx.to_dict("records")
+        parts = [f"{r['名称']} {r['最新价']:.2f}（{r['涨跌幅']:+.2f}%）" for r in idx_rows[:4]]
+        idx_text = "、".join(parts)
+    out["sections"]["指数"] = idx_text
+
+    # 2) 市场结构与阶段
+    phase = ov.get("phase", {})
+    struct = ov.get("structure", {})
+    phase_text = f"大盘阶段：**{phase.get('phase', '数据不足')}**（{phase.get('desc', '')}）→ 建议仓位 {phase.get('position', '空仓防御')}"
+    if struct:
+        ratio = struct.get("涨跌比")
+        bias = "多方占优" if ratio and ratio > 1.2 else ("空方占优" if ratio and ratio < 0.8 else "多空均衡")
+        phase_text += (f"；上涨 {struct.get('上涨')} / 下跌 {struct.get('下跌')} 家，涨跌比 {ratio or '-'}（{bias}），"
+                       f"两市成交 {struct.get('两市成交额(亿)', 0):,.0f} 亿")
+    out["sections"]["大盘"] = phase_text
+
+    # 3) 情绪面
+    emo_text = "情绪面数据暂不可达"
+    if emo is not None:
+        if emo.get("情绪评分") is not None:
+            sc = emo["情绪评分"]
+            emo_text = (f"情绪评分 **{sc}**/100（涨停 {emo.get('涨停家数')} 家 / 最高连板 {emo.get('最高连板')} 板 / "
+                        f"炸板率 {emo.get('炸板率')}% / 昨日涨停今均涨 {emo.get('昨日涨停今平均涨幅')}%）")
+            if sc >= 70:
+                emo_text += " → 情绪偏热，注意高潮兑现"
+            elif sc >= 40:
+                emo_text += " → 情绪中性，做主线不做杂毛"
+            else:
+                emo_text += " → 情绪低迷，接近冰点，等右侧信号"
+    out["sections"]["情绪"] = emo_text
+
+    # 4) 主线
+    main_text = "主线数据暂不可达"
+    try:
+        ml = mainline.mainline_ranking(top_n=5)
+        if ml.get("ranking") is not None and not ml["ranking"].empty:
+            df = ml["ranking"]
+            strong = "、".join(ml.get("strong", [])) or "无"
+            trend_parts = []
+            for _, r in df.head(5).iterrows():
+                trend_parts.append(
+                    f"{r['板块名称']}（涨10日 {r['涨10日']}% / 阳线率 {r['10日阳线率']}% / "
+                    f"趋势 {r['强度趋势']} / {r['生命周期']}）")
+            main_text = (f"强主线：**{strong}**\n\n" + "\n".join(
+                f"- {t}" for t in trend_parts))
+        out["errors"].extend(ml.get("errors", []))
+    except Exception as e:  # noqa: BLE001
+        out["errors"].append(f"主线失败: {e}")
+    out["sections"]["主线"] = main_text
+
+    # 5) 操作提示（基于阶段 + 情绪）
+    tips = []
+    ph = phase.get("phase")
+    sc = emo.get("情绪评分") if emo is not None else None
+    if ph == "强势" and sc is not None and sc >= 70:
+        tips.append("强势+情绪热：顺势持主线龙头，但警惕高潮期最后一棒，兑现加速品种。")
+    elif ph in ("强势", "震荡"):
+        tips.append("结构市：只做主线内强于大盘的龙头，弱票一律不碰（铁律：主线内选股）。")
+    elif ph in ("弱势", "冰点"):
+        tips.append("弱势/冰点：禁止短线与右侧开仓（系统已自动封禁），空仓或极小仓试错超跌，等右侧信号。")
+    else:
+        tips.append("阶段数据不足：按弱势对待，控制仓位，优先看主线与情绪确认方向。")
+    out["sections"]["操作提示"] = "；".join(tips)
+    out["text"] = "\n\n".join(f"**【{k}】** {v}" for k, v in out["sections"].items())
+    _brief_cache["brief"] = (now, out)
+    return out
